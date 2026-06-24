@@ -267,7 +267,7 @@
   function HeroBanner() {
     return `
       <div class="hero">
-        <img src="/hero-autumn.jpg" alt="Parque Villarino en otoño" />
+        <img src="/hero-autumn.png" alt="Parque Villarino en otoño" />
         <div class="hero-overlay">
           <div>
             <h2>Bienvenido al MiniBus Zavalla</h2>
