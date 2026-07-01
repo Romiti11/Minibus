@@ -17,6 +17,9 @@ const HORA_APERTURA = 8;
 const HORA_CIERRE = 12;
 // Modo prueba-----------
 
+const MODO_PRUEBA = true;
+const HORA_PRUEBA = 8;
+
 
   // ---------- Storage helpers ----------
   const KEYS = {
