@@ -15,7 +15,7 @@
   const DESTINO_VUELTA = 'Plaza Sarmiento (Rosario)';
 const HORA_APERTURA = 8;
 const HORA_CIERRE = 12;
-
+// Modo prueba-----------
 const MODO_PRUEBA = true;
 const HORA_PRUEBA = 8;
 
@@ -26,6 +26,7 @@ const HORA_PRUEBA = 8;
     reservas: 'mb_reservas',
     session: 'mb_session',
     theme: 'mb_theme',
+    quejas: 'mb_quejas',
   };
   const load = (k, fb) => {
     try { return JSON.parse(localStorage.getItem(k)) ?? fb; } catch { return fb; }
@@ -41,6 +42,8 @@ const HORA_PRUEBA = 8;
     set reservas(v) { save(KEYS.reservas, v); },
     get session() { return load(KEYS.session, null); },
     set session(v) { v ? save(KEYS.session, v) : localStorage.removeItem(KEYS.session); },
+    get quejas() { return load(KEYS.quejas, []); },
+    set quejas(v) { save(KEYS.quejas, v); },
   };
 
   // ---------- Seed inicial ----------
@@ -65,19 +68,63 @@ const HORA_PRUEBA = 8;
         const d = new Date(today);
         d.setDate(today.getDate() + i);
         if (d.getDay() === 0 || d.getDay() === 6) continue;
-        viajes.push({
-          id: uid(),
-          fecha: ymd(d),
-          capacidad: 24,
-          creadoEn: Date.now(),
-        });
+        // Viaje de ida
+viajes.push({
+  id: uid(),
+  fecha: ymd(d),
+  tipo: 'ida',
+  horario: HORARIO_IDA,
+  origen: ORIGEN_IDA,
+  destino: DESTINO_IDA,
+  capacidad: 24,
+  creadoEn: Date.now(),
+});
+
+// Viaje de vuelta
+viajes.push({
+  id: uid(),
+  fecha: ymd(d),
+  tipo: 'vuelta',
+  horario: HORARIO_VUELTA,
+  origen: ORIGEN_VUELTA,
+  destino: DESTINO_VUELTA,
+  capacidad: 24,
+  creadoEn: Date.now(),
+});
       }
       DB.viajes = viajes;
     } else {
       // Migración: viajes antiguos pueden tener "horario/origen/destino" — los normalizamos
       DB.viajes = DB.viajes.map(v => ({
-        id: v.id, fecha: v.fecha, capacidad: v.capacidad || 25, creadoEn: v.creadoEn || Date.now(),
+        id: v.id,
+        fecha: v.fecha,
+        tipo: v.tipo || 'ida',
+        horario: v.horario || (v.tipo === 'vuelta' ? HORARIO_VUELTA : HORARIO_IDA),
+        origen: v.origen || (v.tipo === 'vuelta' ? ORIGEN_VUELTA : ORIGEN_IDA),
+        destino: v.destino || (v.tipo === 'vuelta' ? DESTINO_VUELTA : DESTINO_IDA),
+        capacidad: v.capacidad || 24,
+        creadoEn: v.creadoEn || Date.now(),
       }));
+      // Completar: cada fecha debe tener viaje de ida Y de vuelta
+      const fechas = [...new Set(DB.viajes.map(v => v.fecha))];
+      fechas.forEach(fecha => {
+        const enFecha = DB.viajes.filter(v => v.fecha === fecha);
+        const capBase = enFecha[0]?.capacidad || 24;
+        if (!enFecha.some(v => v.tipo === 'ida')) {
+          DB.viajes.push({
+            id: uid(), fecha, tipo: 'ida',
+            horario: HORARIO_IDA, origen: ORIGEN_IDA, destino: DESTINO_IDA,
+            capacidad: capBase, creadoEn: Date.now(),
+          });
+        }
+        if (!enFecha.some(v => v.tipo === 'vuelta')) {
+          DB.viajes.push({
+            id: uid(), fecha, tipo: 'vuelta',
+            horario: HORARIO_VUELTA, origen: ORIGEN_VUELTA, destino: DESTINO_VUELTA,
+            capacidad: capBase, creadoEn: Date.now(),
+          });
+        }
+      });
     }
   }
 
@@ -131,7 +178,7 @@ const HORA_PRUEBA = 8;
     const otros = DB.reservas.filter(r => r.viajeId !== viajeId);
     DB.reservas = [...otros, ...rs];
   }
-  function reservar(viajeId, usuarioId) {
+  function reservar(viajeId, usuarioId, tipoServicio = 'normal') {
     const u = DB.usuarios.find(x => x.id === usuarioId);
     if (!u) return { ok: false, error: 'Usuario no encontrado' };
     const viaje = DB.viajes.find(v => v.id === viajeId);
@@ -141,9 +188,13 @@ const HORA_PRUEBA = 8;
     if (DB.reservas.some(r => r.viajeId === viajeId && r.usuarioId === usuarioId)) {
       return { ok: false, error: 'Ya tenés una reserva para este día' };
     }
+    // Prioridad efectiva: si eligió "prioridad" se suma un boost sobre su prioridad base
+    const prioBase = u.prioridad || 1;
+    const prioEfectiva = tipoServicio === 'prioridad' ? prioBase + 3 : prioBase;
     DB.reservas = [...DB.reservas, {
       id: uid(), viajeId, usuarioId,
-      prioridad: u.prioridad || 1,
+      prioridad: prioEfectiva,
+      tipoServicio,
       creadoEn: Date.now(),
       orden: 0, estado: 'pendiente',
     }];
@@ -156,6 +207,41 @@ const HORA_PRUEBA = 8;
     if (!r) return;
     DB.reservas = DB.reservas.filter(x => x.id !== reservaId);
     recomputarOrdenes(r.viajeId);
+  }
+
+
+  // ---------- Helpers por día (ida/vuelta separados) ----------
+  function viajesDia(fecha) {
+    const arr = DB.viajes.filter(v => v.fecha === fecha);
+    return { ida: arr.find(v => v.tipo === 'ida'), vuelta: arr.find(v => v.tipo === 'vuelta') };
+  }
+  function fechasFuturas() {
+    const hoy = ymd(new Date());
+    return [...new Set(DB.viajes.filter(v => v.fecha >= hoy).map(v => v.fecha))]
+      .sort((a,b) => a.localeCompare(b));
+  }
+  function misReservasDia(fecha, userId) {
+    const { ida, vuelta } = viajesDia(fecha);
+    return {
+      ida: ida ? DB.reservas.find(r => r.viajeId === ida.id && r.usuarioId === userId) : null,
+      vuelta: vuelta ? DB.reservas.find(r => r.viajeId === vuelta.id && r.usuarioId === userId) : null,
+    };
+  }
+  function reservarOpcion(fecha, usuarioId, opcion, tipoServicio = 'normal') {
+    const { ida, vuelta } = viajesDia(fecha);
+    const results = [];
+    if ((opcion === 'ida' || opcion === 'ambos') && ida) {
+      const exist = DB.reservas.find(r => r.viajeId === ida.id && r.usuarioId === usuarioId);
+      if (!exist) results.push({ tipo: 'ida', ...reservar(ida.id, usuarioId, tipoServicio) });
+    }
+    if ((opcion === 'vuelta' || opcion === 'ambos') && vuelta) {
+      const exist = DB.reservas.find(r => r.viajeId === vuelta.id && r.usuarioId === usuarioId);
+      if (!exist) results.push({ tipo: 'vuelta', ...reservar(vuelta.id, usuarioId, tipoServicio) });
+    }
+    if (results.length === 0) return { ok: false, error: 'Ya tenés esa reserva' };
+    const err = results.find(r => !r.ok);
+    if (err) return err;
+    return { ok: true, reservas: results };
   }
 
   // ---------- Auth ----------
@@ -259,7 +345,7 @@ const HORA_PRUEBA = 8;
         <div class="hero-overlay">
           <div>
             <h2>Bienvenido al MiniBus Zavalla</h2>
-            <p>Ida 07:00 hs · Vuelta 13:00 hs — Una reserva cubre el día completo</p>
+            <p>Ida 07:00 hs · Vuelta 13:00 hs — Reservá ida, vuelta o ambos por separado</p>
           </div>
         </div>
       </div>
@@ -348,12 +434,9 @@ const HORA_PRUEBA = 8;
   }
 
   function ViewHome(user) {
-    const todayStr = ymd(new Date());
-    const proximos = DB.viajes
-      .filter(v => v.fecha >= todayStr)
-      .sort((a,b) => a.fecha.localeCompare(b.fecha));
-    const viajeHoy = proximos[0];
-    if (!viajeHoy) {
+    const fechas = fechasFuturas();
+    const fechaHoy = fechas[0];
+    if (!fechaHoy) {
       return `
         ${HeroBanner()}
         <h2 class="section-title">Hola, ${escapeHtml(user.nombre)} 👋</h2>
@@ -364,75 +447,130 @@ const HORA_PRUEBA = 8;
       ${HeroBanner()}
       <h2 class="section-title">Hola, ${escapeHtml(user.nombre)} 👋</h2>
       <p class="section-sub">Tu próximo viaje a Zavalla.</p>
-      ${TripFullCard(viajeHoy, user)}
-      ${proximos.length > 1 ? `
+      ${TripFullCard(fechaHoy, user)}
+      ${fechas.length > 1 ? `
         <div class="spacer"></div>
         <div class="card">
           <div class="card-header"><div class="card-title">Próximos viajes</div>
             <button class="btn btn-ghost btn-sm" data-nav="trips">Ver todos</button>
           </div>
           <div class="stack">
-            ${proximos.slice(1, 4).map(v => TripMiniCard(v, user)).join('')}
+            ${fechas.slice(1, 4).map(f => TripMiniCard(f, user)).join('')}
           </div>
         </div>` : ''}
     `;
   }
 
-  function TripFullCard(viaje, user) {
-    const rs = reservasDeViaje(viaje.id);
-    const conf = rs.filter(r => r.estado === 'confirmada');
-    const espera = rs.filter(r => r.estado === 'espera');
-    const miReserva = rs.find(r => r.usuarioId === user.id);
-    const ocupacion = Math.min(100, Math.round((conf.length / viaje.capacidad) * 100));
-    const ventana = puedeReservar(viaje.fecha);
+  function TripFullCard(fecha, user) {
+    const { ida, vuelta } = viajesDia(fecha);
+    if (!ida && !vuelta) return '';
+    const rsIda = ida ? reservasDeViaje(ida.id) : [];
+    const rsVuelta = vuelta ? reservasDeViaje(vuelta.id) : [];
+    const confIda = rsIda.filter(r => r.estado === 'confirmada').length;
+    const confVuelta = rsVuelta.filter(r => r.estado === 'confirmada').length;
+    const mis = misReservasDia(fecha, user.id);
+    const ventana = puedeReservar(fecha);
+
+    const canIda = !!ida && !mis.ida;
+    const canVuelta = !!vuelta && !mis.vuelta;
+    const canAmbos = canIda && canVuelta;
+
+    const misStatus = (mis.ida || mis.vuelta) ? `
+      <div class="stack">
+        ${mis.ida ? `
+          <div class="list-item is-me">
+            <div class="order">${mis.ida.orden}</div>
+            <div style="flex:1">
+              <div style="font-weight:700">Ida · ${HORARIO_IDA} hs</div>
+              <div class="muted" style="font-size:12px">
+                ${mis.ida.estado === 'confirmada' ? `Confirmada · Orden #${mis.ida.orden}` : `Lista de espera · Posición ${mis.ida.orden - ida.capacidad}`}
+              </div>
+            </div>
+            <button class="btn btn-danger btn-sm" data-cancel="${mis.ida.id}">Cancelar</button>
+          </div>` : ''}
+        ${mis.vuelta ? `
+          <div class="list-item is-me">
+            <div class="order">${mis.vuelta.orden}</div>
+            <div style="flex:1">
+              <div style="font-weight:700">Vuelta · ${HORARIO_VUELTA} hs</div>
+              <div class="muted" style="font-size:12px">
+                ${mis.vuelta.estado === 'confirmada' ? `Confirmada · Orden #${mis.vuelta.orden}` : `Lista de espera · Posición ${mis.vuelta.orden - vuelta.capacidad}`}
+              </div>
+            </div>
+            <button class="btn btn-danger btn-sm" data-cancel="${mis.vuelta.id}">Cancelar</button>
+          </div>` : ''}
+      </div>
+    ` : '';
+
+    const picker = (ventana.ok && (canIda || canVuelta)) ? `
+      <div class="card" style="background:var(--bg-soft); box-shadow:none; padding:14px">
+        <div style="font-weight:700; margin-bottom:10px">🎟️ Elegí qué tramos reservar</div>
+        <div class="stack" style="gap:8px">
+          ${canIda ? `
+            <label style="display:flex; align-items:flex-start; gap:10px; padding:12px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--bg-elev); cursor:pointer">
+              <input type="radio" name="opt-${fecha}" value="ida" ${canIda ? 'checked' : ''} style="margin-top:3px" />
+              <div><div style="font-weight:700">A · Solo ida</div>
+                <div class="muted" style="font-size:12px">${HORARIO_IDA} hs · ${ORIGEN_IDA} → ${DESTINO_IDA}</div></div>
+            </label>` : ''}
+          ${canVuelta ? `
+            <label style="display:flex; align-items:flex-start; gap:10px; padding:12px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--bg-elev); cursor:pointer">
+              <input type="radio" name="opt-${fecha}" value="vuelta" ${!canIda ? 'checked' : ''} style="margin-top:3px" />
+              <div><div style="font-weight:700">B · Solo vuelta</div>
+                <div class="muted" style="font-size:12px">${HORARIO_VUELTA} hs · ${ORIGEN_VUELTA} → ${DESTINO_VUELTA}</div></div>
+            </label>` : ''}
+          ${canAmbos ? `
+            <label style="display:flex; align-items:flex-start; gap:10px; padding:12px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--bg-elev); cursor:pointer">
+              <input type="radio" name="opt-${fecha}" value="ambos" style="margin-top:3px" />
+              <div><div style="font-weight:700">C · Ida y vuelta</div>
+                <div class="muted" style="font-size:12px">Reservás ambos tramos del día</div></div>
+            </label>` : ''}
+        </div>
+
+        <div class="spacer"></div>
+        <div style="font-weight:700; margin-bottom:10px">⭐ Tipo de viaje</div>
+        <div class="stack" style="gap:8px">
+          <label style="display:flex; align-items:flex-start; gap:10px; padding:12px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--bg-elev); cursor:pointer">
+            <input type="radio" name="svc-${fecha}" value="normal" checked style="margin-top:3px" />
+            <div><div style="font-weight:700">A · Viaje normal</div>
+              <div class="muted" style="font-size:12px">Reserva estándar según orden de llegada.</div></div>
+          </label>
+          <label style="display:flex; align-items:flex-start; gap:10px; padding:12px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--bg-elev); cursor:pointer">
+            <input type="radio" name="svc-${fecha}" value="prioridad" style="margin-top:3px" />
+            <div><div style="font-weight:700">B · Viaje de prioridad</div>
+              <div class="muted" style="font-size:12px">Se ubica antes en la lista frente a reservas normales.</div></div>
+          </label>
+        </div>
+
+        <div class="spacer"></div>
+        <button class="btn btn-primary btn-block" data-book-day="${fecha}">Reservar</button>
+      </div>
+    ` : (!ventana.ok ? `<div class="notice">🍁 <div><b>Inscripción cerrada.</b> ${escapeHtml(ventana.msg || '')}.</div></div>` : '');
+
+    const totalCap = (ida?.capacidad || 0) + (vuelta?.capacidad || 0);
+    const totalConf = confIda + confVuelta;
+
     return `
       <div class="card">
         <div class="card-header">
           <div>
-            <div class="card-title" style="text-transform:capitalize">${escapeHtml(fmtDateLong(viaje.fecha))}</div>
+            <div class="card-title" style="text-transform:capitalize">${escapeHtml(fmtDateLong(fecha))}</div>
             <div class="muted" style="font-size:13px; margin-top:4px">
               🍂 Ida ${HORARIO_IDA} · Vuelta ${HORARIO_VUELTA}
             </div>
           </div>
-          <span class="badge ${conf.length >= viaje.capacidad ? 'bad' : 'ok'}">${conf.length}/${viaje.capacidad}</span>
+          <span class="badge ok">${totalConf}/${totalCap}</span>
         </div>
-        <div class="occupancy-bar"><span style="width:${ocupacion}%"></span></div>
         <div class="spacer"></div>
         ${RouteSummary()}
         <div class="spacer"></div>
-        ${SeatMap(viaje, rs, user)}
-        <div class="spacer"></div>
-        ${miReserva ? `
-          <div class="list-item is-me">
-            <div class="order">${miReserva.orden}</div>
-            <div style="flex:1">
-              <div style="font-weight:700">Tu reserva del día</div>
-              <div class="muted" style="font-size:12px">
-                ${miReserva.estado === 'confirmada' ? `Ida y vuelta confirmadas · Orden #${miReserva.orden}` : `En lista de espera · Posición ${miReserva.orden - viaje.capacidad}`}
-              </div>
-            </div>
-            <button class="btn btn-danger btn-sm" data-cancel="${miReserva.id}">Cancelar</button>
-          </div>
-        ` : (ventana.ok ? `
-          <button class="btn btn-primary btn-block" data-book="${viaje.id}">
-            ${conf.length >= viaje.capacidad ? '⏳ Anotarme en lista de espera (ida + vuelta)' : '🎟️ Reservar el día (ida + vuelta)'}
-          </button>
-        ` : `
-          <div class="notice">🍁 <div><b>Inscripción cerrada.</b> ${escapeHtml(ventana.msg)}.</div></div>
-        `)}
-        <div class="spacer"></div>
-        <details>
-          <summary class="muted" style="cursor:pointer; font-weight:600">Ver lista de pasajeros (${rs.length})</summary>
-          <div class="list" style="margin-top:10px">
-            ${conf.map(r => PassengerItem(r, user, false)).join('') || '<p class="muted">Aún no hay confirmados</p>'}
-            ${espera.length ? `<div class="muted" style="font-size:12px; margin:8px 4px 4px; font-weight:600">Lista de espera</div>` : ''}
-            ${espera.map(r => PassengerItem(r, user, true)).join('')}
-          </div>
-        </details>
+        ${misStatus}
+        ${(misStatus && picker) ? '<div class="spacer"></div>' : ''}
+        ${picker}
       </div>
     `;
   }
-  function PassengerItem(r, user, isWait) {
+
+    function PassengerItem(r, user, isWait) {
     const u = DB.usuarios.find(x => x.id === r.usuarioId);
     if (!u) return '';
     const isMe = u.id === user.id;
@@ -488,28 +626,32 @@ const HORA_PRUEBA = 8;
     `;
   }
 
-  function TripMiniCard(viaje, user) {
-    const rs = reservasDeViaje(viaje.id);
-    const conf = rs.filter(r => r.estado === 'confirmada').length;
-    const mio = rs.find(r => r.usuarioId === user.id);
+  function TripMiniCard(fecha, user) {
+    const { ida, vuelta } = viajesDia(fecha);
+    const cap = (ida?.capacidad || 0) + (vuelta?.capacidad || 0);
+    const conf = (ida ? DB.reservas.filter(r => r.viajeId === ida.id && r.estado === 'confirmada').length : 0)
+               + (vuelta ? DB.reservas.filter(r => r.viajeId === vuelta.id && r.estado === 'confirmada').length : 0);
+    const mis = misReservasDia(fecha, user.id);
+    const tag = (mis.ida && mis.vuelta) ? 'Ida + Vuelta' : mis.ida ? 'Solo ida' : mis.vuelta ? 'Solo vuelta' : '';
     return `
-      <div class="trip-card" data-trip="${viaje.id}">
+      <div class="trip-card" data-day="${fecha}">
         <div class="trip-date">
-          <div class="day">${fmtDay(viaje.fecha)}</div>
-          <div class="month">${fmtMonth(viaje.fecha).replace('.','')}</div>
+          <div class="day">${fmtDay(fecha)}</div>
+          <div class="month">${fmtMonth(fecha).replace('.','')}</div>
         </div>
         <div class="trip-meta">
-          <div class="t1" style="text-transform:capitalize">${escapeHtml(fmtDateLong(viaje.fecha))}</div>
-          <div class="t2">🕖 ${HORARIO_IDA} ida · 🕐 ${HORARIO_VUELTA} vuelta · ${conf}/${viaje.capacidad}</div>
-          <div class="occupancy-bar"><span style="width:${Math.min(100, (conf/viaje.capacidad)*100)}%"></span></div>
+          <div class="t1" style="text-transform:capitalize">${escapeHtml(fmtDateLong(fecha))}</div>
+          <div class="t2">🕖 ${HORARIO_IDA} ida · 🕐 ${HORARIO_VUELTA} vuelta · ${conf}/${cap}</div>
+          <div class="occupancy-bar"><span style="width:${cap ? Math.min(100, (conf/cap)*100) : 0}%"></span></div>
         </div>
-        ${mio ? `<span class="badge ${mio.estado==='confirmada'?'ok':'warn'}">${mio.estado==='confirmada'?'Reservado':'En espera'}</span>` : ''}
+        ${tag ? `<span class="badge ok">${tag}</span>` : ''}
       </div>`;
   }
 
-  function ViewTrips(user) {
+    function ViewTrips(user) {
     const hoy = ymd(new Date());
     const futuros = DB.viajes.filter(v => v.fecha >= hoy).sort((a,b) => a.fecha.localeCompare(b.fecha));
+    const fechas = fechasFuturas();
     const semana = buildWeek(futuros);
     return `
       <h2 class="section-title">Calendario semanal</h2>
@@ -518,7 +660,7 @@ const HORA_PRUEBA = 8;
       <div class="spacer"></div>
       <h3 class="section-title" style="font-size:18px">Próximos viajes</h3>
       <div class="stack">
-        ${futuros.length ? futuros.map(v => TripMiniCard(v, user)).join('') : `<div class="empty"><div class="em">📭</div>No hay viajes programados</div>`}
+        ${fechas.length ? fechas.map(f => TripMiniCard(f, user)).join('') : `<div class="empty"><div class="em">📭</div>No hay viajes programados</div>`}
       </div>
     `;
   }
@@ -576,7 +718,7 @@ const HORA_PRUEBA = 8;
             <div class="order">#${r.orden}</div>
             <div style="flex:1; min-width:0">
               <div style="font-weight:600; text-transform:capitalize">${escapeHtml(fmtDateLong(r.viaje.fecha))}</div>
-              <div class="muted" style="font-size:12px">Ida ${HORARIO_IDA} · Vuelta ${HORARIO_VUELTA}</div>
+              <div class="muted" style="font-size:12px">${r.viaje.tipo === 'vuelta' ? 'Vuelta · ' + HORARIO_VUELTA : 'Ida · ' + HORARIO_IDA} hs</div>
             </div>
             <span class="badge ${r.estado==='confirmada'?'ok':'warn'}">${r.estado}</span>
           </div>`).join('')}</div>` : `<div class="empty"><div class="em">🗒️</div>Aún no tenés reservas</div>`}
@@ -676,10 +818,44 @@ const HORA_PRUEBA = 8;
           <button class="btn btn-primary" type="submit">Guardar cambios</button>
         </form>
       </div>
+      ${QuejasCard(user)}
       <div class="card">
         <div class="card-title">Cuenta</div>
         <div class="spacer"></div>
         <button class="btn btn-danger" data-act="logout">Cerrar sesión</button>
+      </div>
+    `;
+  }
+
+  function QuejasCard(user) {
+    const mis = DB.quejas
+      .filter(q => q.usuarioId === user.id)
+      .sort((a,b) => b.creadoEn - a.creadoEn);
+    return `
+      <div class="card">
+        <div class="card-title">📖 Libro de Quejas</div>
+        <p class="muted" style="font-size:13px; margin-top:4px">Dejá tu comentario, reclamo o sugerencia. Lo verá el administrador.</p>
+        <div class="spacer"></div>
+        <form id="queja-form" class="stack">
+          <div class="field">
+            <label>Tu mensaje</label>
+            <textarea class="input" name="texto" rows="4" required placeholder="Escribí acá tu queja o sugerencia…" style="min-height:100px; padding:10px; font-family:inherit"></textarea>
+          </div>
+          <button class="btn btn-primary" type="submit">Enviar</button>
+        </form>
+        ${mis.length ? `
+          <div class="spacer"></div>
+          <div class="muted" style="font-weight:700; font-size:13px; margin-bottom:8px">Mis mensajes enviados</div>
+          <div class="stack">
+            ${mis.map(q => `
+              <div class="list-item">
+                <div style="flex:1; min-width:0">
+                  <div style="font-size:14px; white-space:pre-wrap">${escapeHtml(q.texto)}</div>
+                  <div class="muted" style="font-size:11px; margin-top:4px">${new Date(q.creadoEn).toLocaleString('es-AR')}</div>
+                </div>
+                <button class="btn btn-danger btn-sm" data-del-queja="${q.id}">Eliminar</button>
+              </div>`).join('')}
+          </div>` : ''}
       </div>
     `;
   }
@@ -748,6 +924,32 @@ const HORA_PRUEBA = 8;
           </table>
         </div>
       </div>
+
+      ${AdminQuejasCard()}
+    `;
+  }
+
+  function AdminQuejasCard() {
+    const quejas = DB.quejas.slice().sort((a,b) => b.creadoEn - a.creadoEn);
+    return `
+      <div class="card">
+        <div class="card-title">📖 Libro de Quejas (${quejas.length})</div>
+        <div class="spacer"></div>
+        ${quejas.length ? `<div class="stack">${quejas.map(q => {
+          const u = DB.usuarios.find(x => x.id === q.usuarioId);
+          const nombre = u ? `${u.nombre} ${u.apellido}` : 'Usuario eliminado';
+          const sector = u ? u.sector : '';
+          return `
+            <div class="list-item">
+              <div style="flex:1; min-width:0">
+                <div style="font-weight:600; font-size:14px">${escapeHtml(nombre)}${sector ? ` · <span class="muted">${escapeHtml(sector)}</span>` : ''}</div>
+                <div style="font-size:14px; margin-top:4px; white-space:pre-wrap">${escapeHtml(q.texto)}</div>
+                <div class="muted" style="font-size:11px; margin-top:4px">${new Date(q.creadoEn).toLocaleString('es-AR')}</div>
+              </div>
+              <button class="btn btn-danger btn-sm" data-del-queja="${q.id}">Eliminar</button>
+            </div>`;
+        }).join('')}</div>` : '<p class="muted">Sin mensajes por ahora.</p>'}
+      </div>
     `;
   }
 
@@ -792,11 +994,27 @@ const HORA_PRUEBA = 8;
     document.querySelectorAll('[data-book]').forEach(b => b.addEventListener('click', () => {
       const r = reservar(b.dataset.book, user.id);
       if (!r.ok) return toast(r.error, 'bad');
-      toast(r.reserva.estado === 'confirmada' ? `Día reservado · Ida ${HORARIO_IDA} y vuelta ${HORARIO_VUELTA}` : `En lista de espera (#${r.reserva.orden - DB.viajes.find(v=>v.id===b.dataset.book).capacidad})`);
+      const v = DB.viajes.find(x => x.id === b.dataset.book);
+      const label = v && v.tipo === 'vuelta' ? `Vuelta ${HORARIO_VUELTA}` : `Ida ${HORARIO_IDA}`;
+      toast(r.reserva.estado === 'confirmada' ? `${label} reservada` : `${label} · en lista de espera (#${r.reserva.orden - v.capacidad})`);
       render();
     }));
+    document.querySelectorAll('[data-book-day]').forEach(b => b.addEventListener('click', () => {
+      const fecha = b.dataset.bookDay;
+      const sel = document.querySelector(`input[name="opt-${fecha}"]:checked`);
+      if (!sel) return toast('Elegí una opción', 'bad');
+      const svcSel = document.querySelector(`input[name="svc-${fecha}"]:checked`);
+      const tipoServicio = svcSel ? svcSel.value : 'normal';
+      const r = reservarOpcion(fecha, user.id, sel.value, tipoServicio);
+      if (!r.ok) return toast(r.error, 'bad');
+      const nombres = { ida: 'Solo ida', vuelta: 'Solo vuelta', ambos: 'Ida y vuelta' };
+      const svcLabel = tipoServicio === 'prioridad' ? ' · Prioridad ⭐' : '';
+      toast(`Reserva confirmada · ${nombres[sel.value]}${svcLabel}`);
+      render();
+    }));
+    document.querySelectorAll('[data-day]').forEach(el => el.addEventListener('click', () => navigate('home')));
     document.querySelectorAll('[data-cancel]').forEach(b => b.addEventListener('click', () => {
-      if (!confirm('¿Cancelar tu reserva del día (ida y vuelta)?')) return;
+      if (!confirm('¿Cancelar esta reserva?')) return;
       cancelar(b.dataset.cancel); toast('Reserva cancelada'); render();
     }));
 
@@ -812,17 +1030,22 @@ const HORA_PRUEBA = 8;
     if (tf) tf.addEventListener('submit', e => {
       e.preventDefault();
       const data = Object.fromEntries(new FormData(tf));
-      DB.viajes = [...DB.viajes, {
-        id: uid(), fecha: data.fecha,
-        capacidad: Number(data.capacidad), creadoEn: Date.now(),
-      }];
-      toast('Día habilitado'); render();
+      if (DB.viajes.some(v => v.fecha === data.fecha)) { toast('Ya existe un día habilitado para esa fecha', 'bad'); return; }
+      const cap = Number(data.capacidad);
+      DB.viajes = [...DB.viajes,
+        { id: uid(), fecha: data.fecha, tipo: 'ida', horario: HORARIO_IDA, origen: ORIGEN_IDA, destino: DESTINO_IDA, capacidad: cap, creadoEn: Date.now() },
+        { id: uid(), fecha: data.fecha, tipo: 'vuelta', horario: HORARIO_VUELTA, origen: ORIGEN_VUELTA, destino: DESTINO_VUELTA, capacidad: cap, creadoEn: Date.now() },
+      ];
+      toast('Día habilitado (ida + vuelta)'); render();
     });
     document.querySelectorAll('[data-del-trip]').forEach(b => b.addEventListener('click', () => {
-      if (!confirm('¿Eliminar este día y todas sus reservas?')) return;
+      if (!confirm('¿Eliminar este día (ida + vuelta) y todas sus reservas?')) return;
       const id = b.dataset.delTrip;
-      DB.viajes = DB.viajes.filter(v => v.id !== id);
-      DB.reservas = DB.reservas.filter(r => r.viajeId !== id);
+      const v = DB.viajes.find(x => x.id === id);
+      const fecha = v ? v.fecha : null;
+      const idsBorrar = fecha ? DB.viajes.filter(x => x.fecha === fecha).map(x => x.id) : [id];
+      DB.viajes = DB.viajes.filter(x => !idsBorrar.includes(x.id));
+      DB.reservas = DB.reservas.filter(r => !idsBorrar.includes(r.viajeId));
       toast('Día eliminado'); render();
     }));
     document.querySelectorAll('[data-del-user]').forEach(b => b.addEventListener('click', () => {
@@ -841,6 +1064,21 @@ const HORA_PRUEBA = 8;
       DB.reservas = DB.reservas.map(r => r.usuarioId === id ? { ...r, prioridad: Number(s.value) } : r);
       viajesAfectados.forEach(vid => recomputarOrdenes(vid));
       toast('Prioridad actualizada'); render();
+    }));
+
+    const qf = document.getElementById('queja-form');
+    if (qf) qf.addEventListener('submit', e => {
+      e.preventDefault();
+      const data = Object.fromEntries(new FormData(qf));
+      const texto = String(data.texto || '').trim();
+      if (!texto) return toast('Escribí un mensaje', 'bad');
+      DB.quejas = [...DB.quejas, { id: uid(), usuarioId: user.id, texto, creadoEn: Date.now() }];
+      toast('Mensaje enviado 📖'); render();
+    });
+    document.querySelectorAll('[data-del-queja]').forEach(b => b.addEventListener('click', () => {
+      if (!confirm('¿Eliminar este mensaje?')) return;
+      DB.quejas = DB.quejas.filter(q => q.id !== b.dataset.delQueja);
+      toast('Mensaje eliminado'); render();
     }));
   }
 
