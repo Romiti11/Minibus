@@ -13,7 +13,11 @@
   const DESTINO_IDA = 'Parque Villarino (Zavalla)';
   const ORIGEN_VUELTA = 'Parque Villarino (Zavalla)';
   const DESTINO_VUELTA = 'Plaza Sarmiento (Rosario)';
-  const HORA_APERTURA = 20; // 20:00 hs del día anterior
+const HORA_APERTURA = 8;
+const HORA_CIERRE = 12;
+
+const MODO_PRUEBA = true;
+const HORA_PRUEBA = 8;
 
   // ---------- Storage helpers ----------
   const KEYS = {
@@ -102,25 +106,9 @@
   // ---------- Ventana de inscripción ----------
   // Regla: la inscripción abre a las 20:00 hs del día anterior al viaje.
   // Se puede reservar durante esa noche y hasta antes de que salga el minibús.
-  function puedeReservar(fecha) {
-    const now = new Date();
-    const target = new Date(fecha + 'T00:00:00');
-    const today = new Date(); today.setHours(0,0,0,0);
-    const diffDays = Math.round((target - today) / 86400000);
-    if (diffDays < 0) return { ok: false, msg: 'Este viaje ya pasó' };
-    if (diffDays === 0) {
-      // mismo día: aún se puede si no salió el bus
-      const [h, m] = HORARIO_IDA.split(':').map(Number);
-      const salida = new Date(target); salida.setHours(h, m, 0, 0);
-      if (now >= salida) return { ok: false, msg: 'El minibús ya partió' };
-      return { ok: true };
-    }
-    if (diffDays === 1) {
-      if (now.getHours() >= HORA_APERTURA) return { ok: true };
-      return { ok: false, msg: `La inscripción abre hoy a las ${HORA_APERTURA}:00 hs` };
-    }
-    return { ok: false, msg: 'Solo podés reservar la noche anterior al viaje (desde las 20:00 hs)' };
-  }
+ function puedeReservar(fecha) {
+    return { ok: true };
+}
 
   // ---------- Reservas: lógica con prioridades y lista de espera ----------
   function reservasDeViaje(viajeId) {
