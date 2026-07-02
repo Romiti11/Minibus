@@ -16,10 +16,8 @@
 const HORA_APERTURA = 8;
 const HORA_CIERRE = 12;
 // Modo prueba-----------
-
 const MODO_PRUEBA = true;
 const HORA_PRUEBA = 8;
-
 
   // ---------- Storage helpers ----------
   const KEYS = {
@@ -54,12 +52,12 @@ const HORA_PRUEBA = 8;
       const admin = {
         id: uid(), email: 'admin@minibus.com', password: 'admin',
         nombre: 'Admin', apellido: 'Sistema', sector: 'Sistemas',
-        prioridad: 3, rol: 'admin', creadoEn: Date.now(),
+        prioridad: 3, rol: 'admin', tipoUsuario: 'no_docente', creadoEn: Date.now(),
       };
       const demo = {
         id: uid(), email: 'demo@minibus.com', password: 'demo',
         nombre: 'Juan', apellido: 'Pérez', sector: 'Producción',
-        prioridad: 1, rol: 'user', creadoEn: Date.now(),
+        prioridad: 1, rol: 'user', tipoUsuario: 'docente', creadoEn: Date.now(),
       };
       DB.usuarios = [admin, demo];
     }
@@ -269,6 +267,7 @@ viajes.push({
       id: uid(), email: data.email, password: data.password,
       nombre: data.nombre, apellido: data.apellido,
       sector: data.sector || 'Sin sector', prioridad: 1, rol: 'user',
+      tipoUsuario: data.tipoUsuario || 'no_docente',
       creadoEn: Date.now(),
     };
     DB.usuarios = [...DB.usuarios, u];
@@ -314,6 +313,7 @@ viajes.push({
       case 'history': return ViewHistory(user);
       case 'stats': return ViewStats(user);
       case 'profile': return ViewProfile(user);
+      case 'quejas': return user.rol === 'admin' ? ViewAdmin(user) : ViewQuejas(user);
       case 'admin': return user.rol === 'admin' ? ViewAdmin(user) : ViewHome(user);
       default: return ViewHome(user);
     }
@@ -355,15 +355,22 @@ viajes.push({
   }
 
   function BottomNav(user) {
-    const items = [
-      { id: 'home', label: 'Hoy', icon: iconHome() },
-      { id: 'trips', label: 'Viajes', icon: iconCalendar() },
-      { id: 'history', label: 'Historial', icon: iconList() },
-      { id: 'stats', label: 'Stats', icon: iconStats() },
-      user.rol === 'admin'
-        ? { id: 'admin', label: 'Admin', icon: iconAdmin() }
-        : { id: 'profile', label: 'Perfil', icon: iconUser() },
-    ];
+    const items = user.rol === 'admin'
+      ? [
+          { id: 'home', label: 'Hoy', icon: iconHome() },
+          { id: 'trips', label: 'Viajes', icon: iconCalendar() },
+          { id: 'history', label: 'Historial', icon: iconList() },
+          { id: 'stats', label: 'Stats', icon: iconStats() },
+          { id: 'admin', label: 'Admin', icon: iconAdmin() },
+        ]
+      : [
+          { id: 'home', label: 'Hoy', icon: iconHome() },
+          { id: 'trips', label: 'Viajes', icon: iconCalendar() },
+          { id: 'history', label: 'Historial', icon: iconList() },
+          { id: 'quejas', label: 'Quejas', icon: iconBook() },
+          { id: 'profile', label: 'Perfil', icon: iconUser() },
+        ];
+
     return `<nav class="bottom-nav">${items.map(i => `
       <button class="nav-item ${currentView === i.id ? 'active' : ''}" data-nav="${i.id}">
         ${i.icon}<span>${i.label}</span>
@@ -410,6 +417,12 @@ viajes.push({
           <div class="field" style="flex:1; min-width:120px"><label>Apellido</label><input class="input" name="apellido" required /></div>
         </div>
         <div class="field"><label>Sector</label><input class="input" name="sector" placeholder="Producción, RRHH, IT…" /></div>
+        <div class="field"><label>Tipo de usuario</label>
+          <select class="input select" name="tipoUsuario" required>
+            <option value="docente">A · Docente</option>
+            <option value="no_docente">B · No docente</option>
+          </select>
+        </div>
         <div class="field"><label>Email</label><input class="input" name="email" type="email" required /></div>
         <div class="field"><label>Contraseña</label><input class="input" name="password" type="password" required minlength="4" /></div>
         <button class="btn btn-primary btn-block" type="submit">Crear cuenta</button>
@@ -817,15 +830,29 @@ viajes.push({
             <div class="field" style="flex:1; min-width:140px"><label>Apellido</label><input class="input" name="apellido" value="${escapeHtml(user.apellido)}" required /></div>
           </div>
           <div class="field"><label>Sector</label><input class="input" name="sector" value="${escapeHtml(user.sector)}" /></div>
+          <div class="field"><label>Tipo de usuario</label>
+            <select class="input select" name="tipoUsuario">
+              <option value="docente" ${user.tipoUsuario==='docente'?'selected':''}>A · Docente</option>
+              <option value="no_docente" ${user.tipoUsuario!=='docente'?'selected':''}>B · No docente</option>
+            </select>
+          </div>
           <button class="btn btn-primary" type="submit">Guardar cambios</button>
         </form>
       </div>
-      ${QuejasCard(user)}
+      
       <div class="card">
         <div class="card-title">Cuenta</div>
         <div class="spacer"></div>
         <button class="btn btn-danger" data-act="logout">Cerrar sesión</button>
       </div>
+    `;
+  }
+
+  function ViewQuejas(user) {
+    return `
+      <h2 class="section-title">Libro de Quejas</h2>
+      <p class="section-sub">Dejá tu comentario, reclamo o sugerencia. Lo verá el administrador.</p>
+      ${QuejasCard(user)}
     `;
   }
 
@@ -906,19 +933,24 @@ viajes.push({
         <div class="spacer"></div>
         <div style="overflow-x:auto">
           <table class="table">
-            <thead><tr><th>Nombre</th><th>Sector</th><th>Email</th><th>Prioridad</th><th>Rol</th><th></th></tr></thead>
+            <thead><tr><th>Nombre</th><th>Sector</th><th>Tipo</th><th>Email</th><th>Prioridad</th><th>Rol</th><th></th></tr></thead>
             <tbody>
               ${usuarios.map(u => `
                 <tr>
                   <td>${escapeHtml(u.nombre)} ${escapeHtml(u.apellido)}</td>
                   <td>${escapeHtml(u.sector)}</td>
+                  <td>${u.tipoUsuario === 'docente' ? 'Docente' : 'No docente'}</td>
                   <td class="muted">${escapeHtml(u.email)}</td>
                   <td>
                     <select class="select" data-prio="${u.id}" style="padding:6px 10px; font-size:13px">
                       ${[1,2,3].map(p => `<option value="${p}" ${u.prioridad===p?'selected':''}>P${p}${p===3?' (alta)':p===2?' (media)':' (normal)'}</option>`).join('')}
                     </select>
                   </td>
-                  <td><span class="badge ${u.rol==='admin'?'brand':''}">${u.rol}</span></td>
+                  <td>${u.id !== user.id ? `
+                    <select class="select" data-rol="${u.id}" style="padding:6px 10px; font-size:13px">
+                      <option value="user" ${u.rol==='user'?'selected':''}>Usuario</option>
+                      <option value="admin" ${u.rol==='admin'?'selected':''}>Administrador</option>
+                    </select>` : `<span class="badge brand">${u.rol}</span>`}</td>
                   <td style="text-align:right">${u.id !== user.id ? `<button class="btn btn-danger btn-sm" data-del-user="${u.id}">Eliminar</button>` : ''}</td>
                 </tr>
               `).join('')}
@@ -927,7 +959,55 @@ viajes.push({
         </div>
       </div>
 
+      ${AdminPasajerosCard()}
+
       ${AdminQuejasCard()}
+    `;
+  }
+
+  function AdminPasajerosCard() {
+    const hoy = ymd(new Date());
+    const fechas = [...new Set(DB.viajes.map(v => v.fecha))]
+      .filter(f => f >= hoy)
+      .sort((a,b) => a.localeCompare(b));
+    const tipoLabel = (u) => u && u.tipoUsuario === 'docente' ? 'Docente' : 'No docente';
+    const listaTramo = (viaje) => {
+      if (!viaje) return '<p class="muted" style="font-size:13px">Sin viaje.</p>';
+      const rs = reservasDeViaje(viaje.id);
+      if (!rs.length) return '<p class="muted" style="font-size:13px">Sin pasajeros anotados.</p>';
+      return `<div class="stack">${rs.map(r => {
+        const u = DB.usuarios.find(x => x.id === r.usuarioId);
+        const nombre = u ? `${u.nombre} ${u.apellido}` : 'Usuario eliminado';
+        return `
+          <div class="list-item ${r.estado==='espera'?'waitlist':''}">
+            <div class="order">${r.orden}</div>
+            <div style="flex:1; min-width:0">
+              <div style="font-weight:600; font-size:14px">${escapeHtml(nombre)}</div>
+              <div class="muted" style="font-size:12px">${u ? escapeHtml(u.sector) : ''} · ${tipoLabel(u)}</div>
+            </div>
+            <span class="badge ${r.estado==='confirmada'?'ok':'warn'}">${r.estado}</span>
+          </div>`;
+      }).join('')}</div>`;
+    };
+    return `
+      <div class="card">
+        <div class="card-title">📋 Listas de pasajeros</div>
+        <p class="muted" style="font-size:13px; margin-top:4px">Pasajeros anotados por día (ida y vuelta).</p>
+        <div class="spacer"></div>
+        ${fechas.length ? fechas.map(f => {
+          const { ida, vuelta } = viajesDia(f);
+          return `
+            <div class="card" style="background:var(--bg-soft); box-shadow:none">
+              <div class="card-title" style="text-transform:capitalize; font-size:15px">${escapeHtml(fmtDateLong(f))}</div>
+              <div class="spacer"></div>
+              <div style="font-weight:700; margin-bottom:6px">Ida · ${HORARIO_IDA} hs</div>
+              ${listaTramo(ida)}
+              <div class="spacer"></div>
+              <div style="font-weight:700; margin-bottom:6px">Vuelta · ${HORARIO_VUELTA} hs</div>
+              ${listaTramo(vuelta)}
+            </div>`;
+        }).join('') : '<p class="muted">No hay días de viaje próximos.</p>'}
+      </div>
     `;
   }
 
@@ -1067,6 +1147,11 @@ viajes.push({
       viajesAfectados.forEach(vid => recomputarOrdenes(vid));
       toast('Prioridad actualizada'); render();
     }));
+    document.querySelectorAll('[data-rol]').forEach(s => s.addEventListener('change', () => {
+      const id = s.dataset.rol;
+      DB.usuarios = DB.usuarios.map(u => u.id === id ? { ...u, rol: s.value } : u);
+      toast(s.value === 'admin' ? 'Ahora es administrador' : 'Ahora es usuario normal'); render();
+    }));
 
     const qf = document.getElementById('queja-form');
     if (qf) qf.addEventListener('submit', e => {
@@ -1090,13 +1175,30 @@ viajes.push({
   function iconList(){return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>`}
   function iconStats(){return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><rect x="7" y="13" width="3" height="5"/><rect x="12" y="9" width="3" height="9"/><rect x="17" y="5" width="3" height="13"/></svg>`}
   function iconUser(){return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-7 8-7s8 3 8 7"/></svg>`}
+  function iconBook(){return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h13a2 2 0 0 1 2 2v14H6a2 2 0 0 1-2-2V4z"/><path d="M4 4v14a2 2 0 0 0 2 2"/><path d="M9 8h6M9 12h6"/></svg>`}
   function iconAdmin(){return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l8 4v6c0 5-3.5 9-8 10-4.5-1-8-5-8-10V6l8-4z"/></svg>`}
   function iconLogout(){return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><path d="M15 17l5-5-5-5M20 12H9M9 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h4"/></svg>`}
   function sun(){return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>`}
   function moon(){return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><path d="M21 12.79A9 9 0 1 1 11.21 3a7 7 0 0 0 9.79 9.79z"/></svg>`}
 
   // ---------- Boot ----------
-  initTheme();
-  seed();
-  render();
+  async function boot() {
+    initTheme();
+    // Mini base de datos: si no hay datos guardados, se cargan desde db.json
+    if (DB.usuarios.length === 0) {
+      try {
+        const res = await fetch('db.json', { cache: 'no-store' });
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.usuarios) && data.usuarios.length) DB.usuarios = data.usuarios;
+          if (Array.isArray(data.quejas)) DB.quejas = data.quejas;
+          if (Array.isArray(data.reservas)) DB.reservas = data.reservas;
+        }
+      } catch (e) { /* sin db.json se usa el seed local */ }
+    }
+    seed();
+    render();
+  }
+  boot();
 })();
+
