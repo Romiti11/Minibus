@@ -1,0 +1,37 @@
+{
+  "usuarios": [
+    {
+      "id": "seed-admin",
+      "email": "admin@minibus.com",
+      "password": "admin",
+      "nombre": "Admin",
+      "apellido": "Sistema",
+      "sector": "Sistemas",
+      "prioridad": 3,
+      "rol": "admin",
+      "tipoUsuario": "no_docente",
+      "creadoEn": 1719878400000
+    },
+    {
+      "id": "seed-demo",
+      "email": "demo@minibus.com",
+      "password": "demo",
+      "nombre": "Juan",
+      "apellido": "Pérez",
+      "sector": "Producción",
+      "prioridad": 1,
+      "rol": "user",
+      "tipoUsuario": "docente",
+      "creadoEn": 1719878400000
+    }
+  ],
+  "quejas": [
+    {
+      "id": "seed-queja-1",
+      "usuarioId": "seed-demo",
+      "texto": "El minibús de la vuelta salió 10 minutos tarde el lunes.",
+      "creadoEn": 1719964800000
+    }
+  ],
+  "reservas": []
+}
